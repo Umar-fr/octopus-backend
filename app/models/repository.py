@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean
-from app.models.database import Base
+from app.models.base import Base
 
 class Repository(Base):
     __tablename__ = "repositories"
