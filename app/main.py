@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from dotenv import load_dotenv
 from app.auth.github import router as github_router
 
-load_dotenv("env.local")
+load_dotenv(".env.local")
 
 app = FastAPI(title="Octopus Backend")
 
