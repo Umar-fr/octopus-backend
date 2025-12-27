@@ -1,7 +1,13 @@
 from fastapi import FastAPI
+from dotenv import load_dotenv
+from app.auth.github import router as github_router
 
-app = FastAPI(title="Octopus API")
+load_dotenv("env.local")
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+app = FastAPI(title="Octopus Backend")
+
+app.include_router(github_router)
+
+@app.get("/")
+def root():
+    return {"status": "Backend running"}
