@@ -6,7 +6,7 @@ def ingest_issues(repo, db, repo_id):
     count = 0
 
     for issue in issues:
-        if issue.pull_request:
+        if hasattr(issue, "pull_request"):
             continue
 
         # Step 5.2: Classify once during ingestion
