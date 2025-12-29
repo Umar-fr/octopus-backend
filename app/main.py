@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-
+from app.api.issues import router as issues_router
 from app.auth.github import router as github_router
 from app.api.repo import router as repo_router
 
@@ -23,6 +23,7 @@ app.add_middleware(
 # Routers
 app.include_router(github_router)
 app.include_router(repo_router)
+app.include_router(issues_router)
 
 @app.get("/")
 def root():

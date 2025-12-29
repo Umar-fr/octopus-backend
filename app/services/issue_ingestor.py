@@ -6,10 +6,10 @@ def ingest_issues(repo, db, repo_id):
     count = 0
 
     for issue in issues:
-        if hasattr(issue, "pull_request"):
+        # ✅ Correct PR filtering
+        if issue.pull_request is not None:
             continue
 
-        # Step 5.2: Classify once during ingestion
         difficulty = classify_issue(issue.title, issue.body or "")
 
         db_issue = Issue(
@@ -17,8 +17,9 @@ def ingest_issues(repo, db, repo_id):
             issue_number=issue.number,
             title=issue.title,
             body=issue.body or "",
-            difficulty=difficulty  # <-- classified value
+            difficulty=difficulty
         )
+
         db.add(db_issue)
         count += 1
 
