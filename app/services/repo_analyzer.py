@@ -6,4 +6,5 @@ def analyze_repo(repo):
         "language": repo.language,
         "open_issues": repo.open_issues_count,
         "default_branch": repo.default_branch
+        
     }

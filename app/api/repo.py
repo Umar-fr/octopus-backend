@@ -5,6 +5,7 @@ from app.services.issue_ingestor import ingest_issues
 from app.utils.db import SessionLocal
 from app.config.settings import settings
 from sqlalchemy import text
+from app.models.repository import Repository
 
 router = APIRouter()
 
@@ -14,19 +15,49 @@ def analyze_repository(repo_url: str):
     repo = github.get_repo(repo_url)
 
     db = SessionLocal()
-    repo_data = analyze_repo(repo)
-    issue=repo.get_issues(state="open")
-    for issues in issue:
-        print(issues.title)
 
-    # save repo & issues (simplified)
-    count = ingest_issues(repo, db, repo_id=1)
+    try:
+        # 1️⃣ Check if repo already exists (USE html_url)
+        existing_repo = db.query(Repository).filter(
+            Repository.repo_url == repo.html_url
+        ).first()
 
-    return {
-        "repo": repo_data,
-        "issues_ingested": count,
-        "db_connection": db.bind.url.__str__()
-    }
+        if existing_repo:
+            repo_id = existing_repo.id
+        else:
+            # 2️⃣ Create new repo
+            new_repo = Repository(
+                repo_url=repo.html_url,
+                name=repo.full_name,
+                analyzed=True,
+                github_id=repo.id
+            )
+
+            db.add(new_repo)
+            db.commit()
+            db.refresh(new_repo)
+
+            repo_id = new_repo.id
+
+        # 3️⃣ Ingest issues (SAFE to call multiple times)
+        count = ingest_issues(repo, db, repo_id=repo_id)
+
+        return {
+            "repo": {
+                "id": repo_id,
+                "name": repo.full_name
+            },
+            "repo_id": repo_id,
+            "issues_ingested": count
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise e
+
+    finally:
+        db.close()
+
 
 @router.get("/health/db")
 def db_health():

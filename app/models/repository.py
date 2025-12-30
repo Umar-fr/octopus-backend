@@ -8,3 +8,4 @@ class Repository(Base):
     repo_url = Column(String, unique=True, index=True)
     name = Column(String)
     analyzed = Column(Boolean, default=False)
+    github_id = Column(Integer, unique=True, index=True)

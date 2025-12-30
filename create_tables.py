@@ -3,6 +3,7 @@ from app.models.base import Base
 
 # IMPORTANT: import models so SQLAlchemy knows them
 from app.models.issue import Issue
+from app.models.repository import Repository
 
 print("Creating tables...")
 Base.metadata.create_all(bind=engine)
