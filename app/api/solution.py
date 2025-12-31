@@ -1,22 +1,58 @@
-from fastapi import APIRouter
-from app.services.solution_generator import generate_solution
-from app.services.solution_service import save_solution
-from app.services.repo_context import build_repo_context
+import json
+from fastapi import APIRouter, HTTPException
 from app.utils.db import SessionLocal
 from app.models.issue import Issue
+from app.models.solution import IssueSolution
+from app.services.solution_generator import generate_solution
+from app.services.solution_service import save_solution
 
-router = APIRouter()
+router = APIRouter(prefix="/solutions", tags=["Solutions"])
 
-@router.post("/solution/{issue_id}")
-def solve_issue(issue_id: int):
+@router.get("/{issue_id}")
+def get_or_generate_solution(issue_id: int):
     db = SessionLocal()
 
-    issue = db.query(Issue).filter(Issue.id == issue_id).first()
-    repo = db.query(Repository).filter(Repository.id == issue.repo_id).first()
+    try:
+        # 1️⃣ Check cache
+        cached = (
+            db.query(IssueSolution)
+            .filter(IssueSolution.issue_id == issue_id)
+            .first()
+        )
 
-    repo_context = build_repo_context(repo)
-    steps = generate_solution(repo_context, issue)
+        if cached:
+            return {
+                "cached": True,
+                "steps": json.loads(cached.steps)
+            }
 
-    save_solution(db, issue_id, steps)
+        # 2️⃣ Load issue
+        issue = db.query(Issue).filter(Issue.id == issue_id).first()
+        if not issue:
+            raise HTTPException(status_code=404, detail="Issue not found")
 
-    return {"steps": steps}
+        # 3️⃣ Repo context (can be expanded later)
+        repo_context = f"Repository ID: {issue.repo_id}"
+
+        # 4️⃣ Generate solution (SAFE)
+        try:
+            steps = generate_solution(repo_context, issue)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "AI failed to generate a valid solution",
+                    "error": str(e)
+                }
+            )
+
+        # 5️⃣ Save to DB
+        save_solution(db, issue.id, steps)
+
+        return {
+            "cached": False,
+            "steps": steps
+        }
+
+    finally:
+        db.close()

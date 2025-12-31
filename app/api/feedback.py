@@ -1,3 +1,9 @@
+from fastapi import APIRouter
+from app.utils.db import SessionLocal
+from app.models.feedback import StepFeedback
+
+router = APIRouter()
+
 @router.post("/feedback")
 def submit_feedback(issue_id: int, step_number: int, error: str):
     db = SessionLocal()

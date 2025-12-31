@@ -20,13 +20,14 @@ Title: {issue.title}
 Description: {issue.body}
 
 Generate a step-by-step solution.
-Each step must include:
-- Explanation
-- What file to modify
-- What change to make
-- How to verify the fix
 
-Respond in JSON with this structure:
+STRICT RULES:
+- Respond ONLY with valid JSON
+- Do NOT include markdown
+- Do NOT include explanations outside JSON
+- Do NOT wrap response in ```json
+
+JSON FORMAT:
 [
   {{
     "step": 1,
@@ -45,4 +46,22 @@ Respond in JSON with this structure:
         temperature=0.1
     )
 
-    return json.loads(response.choices[0].message.content)
+    content = response.choices[0].message.content.strip()
+
+    # 🛡️ Remove markdown fences if Azure adds them
+    if content.startswith("```"):
+        content = content.replace("```json", "").replace("```", "").strip()
+
+    try:
+        parsed = json.loads(content)
+
+        # Extra safety check
+        if not isinstance(parsed, list):
+            raise ValueError("AI response is not a list")
+
+        return parsed
+
+    except Exception as e:
+        raise ValueError(
+            f"AI returned invalid JSON.\n\nRaw response:\n{content}"
+        ) from e

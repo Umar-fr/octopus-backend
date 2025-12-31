@@ -1,13 +1,13 @@
 from fastapi import APIRouter
 from app.services.github_service import GitHubService
-from app.services.repo_analyzer import analyze_repo
 from app.services.issue_ingestor import ingest_issues
 from app.utils.db import SessionLocal
 from app.config.settings import settings
-from sqlalchemy import text
 from app.models.repository import Repository
+from sqlalchemy import text
 
 router = APIRouter()
+
 
 @router.post("/analyze")
 def analyze_repository(repo_url: str):
@@ -17,37 +17,41 @@ def analyze_repository(repo_url: str):
     db = SessionLocal()
 
     try:
-        # 1️⃣ Check if repo already exists (USE html_url)
-        existing_repo = db.query(Repository).filter(
-            Repository.repo_url == repo.html_url
-        ).first()
+        owner = repo.owner.login
+        name = repo.name
 
-        if existing_repo:
-            repo_id = existing_repo.id
-        else:
-            # 2️⃣ Create new repo
-            new_repo = Repository(
-                repo_url=repo.html_url,
-                name=repo.full_name,
-                analyzed=True,
-                github_id=repo.id
+        # ✅ Check if repo already exists
+        existing_repo = (
+            db.query(Repository)
+            .filter(
+                Repository.name == name,
+                Repository.owner == owner
             )
+            .first()
+        )
 
-            db.add(new_repo)
+        if not existing_repo:
+            db_repo = Repository(
+                github_id=repo.id,
+                name=name,
+                owner=owner,
+                repo_url=repo.html_url,
+                analyzed=True
+            )
+            db.add(db_repo)
             db.commit()
-            db.refresh(new_repo)
+            db.refresh(db_repo)
+        else:
+            db_repo = existing_repo
 
-            repo_id = new_repo.id
-
-        # 3️⃣ Ingest issues (SAFE to call multiple times)
-        count = ingest_issues(repo, db, repo_id=repo_id)
+        count = ingest_issues(repo, db, repo_id=db_repo.id)
 
         return {
             "repo": {
-                "id": repo_id,
-                "name": repo.full_name
+                "id": db_repo.id,
+                "name": f"{db_repo.owner}/{db_repo.name}"
             },
-            "repo_id": repo_id,
+            "repo_id": db_repo.id,
             "issues_ingested": count
         }
 
@@ -59,13 +63,29 @@ def analyze_repository(repo_url: str):
         db.close()
 
 
+
+@router.get("/repositories")
+def get_repositories():
+    db = SessionLocal()
+    try:
+        repos = db.query(Repository).order_by(Repository.id.desc()).all()
+        return [
+            {
+                "id": r.id,
+                # ✅ FIX
+                "name": f"{r.owner}/{r.name}"
+            }
+            for r in repos
+        ]
+    finally:
+        db.close()
+
+
 @router.get("/health/db")
 def db_health():
     db = SessionLocal()
     try:
         db.execute(text("SELECT 1"))
         return {"db": "connected"}
-    except Exception as e:
-        return {"db": "error", "detail": str(e)}
     finally:
         db.close()

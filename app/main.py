@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 from app.api.issues import router as issues_router
 from app.auth.github import router as github_router
 from app.api.repo import router as repo_router
+from app.api.solution import router as solution_router
+
 
 load_dotenv(".env.local")
 
@@ -24,6 +26,8 @@ app.add_middleware(
 app.include_router(github_router)
 app.include_router(repo_router)
 app.include_router(issues_router)
+app.include_router(solution_router)
+
 
 @app.get("/")
 def root():
