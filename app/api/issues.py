@@ -4,7 +4,7 @@ from app.models.issue import Issue
 
 router = APIRouter(prefix="/issues", tags=["Issues"])
 
-@router.get("/")
+@router.get("")
 def get_issues(
     repo_id: int,
     difficulty: str | None = Query(default=None)

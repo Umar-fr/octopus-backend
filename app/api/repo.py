@@ -11,15 +11,13 @@ from app.utils.db import SessionLocal
 from app.config.settings import settings
 from app.models.repository import Repository
 from app.models.issue import Issue
-from sqlalchemy import text, func
+from sqlalchemy import text
 from sqlalchemy.orm import Session
+import traceback
 
 router = APIRouter()
 
 
-# -------------------------
-# Utility: DB Dependency
-# -------------------------
 def get_db():
     db = SessionLocal()
     try:
@@ -28,9 +26,6 @@ def get_db():
         db.close()
 
 
-# -------------------------
-# Background Task
-# -------------------------
 def analyze_repo_background(repo_id: int, repo_url: str, force: bool):
     db = SessionLocal()
     try:
@@ -48,13 +43,17 @@ def analyze_repo_background(repo_id: int, repo_url: str, force: bool):
         db_repo.status = "analyzing"
         db.commit()
 
-        count = ingest_issues_chunked(repo, db, repo_id=repo_id)
+        count = ingest_issues_chunked(repo, db, repo_id)
 
         db_repo.status = "ready" if count > 0 else "empty"
         db_repo.analyzed = True
         db.commit()
 
-    except Exception:
+    except Exception as e:
+        print("❌ ANALYZE FAILED")
+        print(traceback.format_exc())
+
+        db_repo = db.query(Repository).get(repo_id)
         if db_repo:
             db_repo.status = "error"
             db.commit()
@@ -62,9 +61,6 @@ def analyze_repo_background(repo_id: int, repo_url: str, force: bool):
         db.close()
 
 
-# -------------------------
-# ANALYZE REPOSITORY (NON-BLOCKING)
-# -------------------------
 @router.post("/analyze")
 def analyze_repository(
     repo_url: str,
@@ -97,7 +93,6 @@ def analyze_repository(
         db.commit()
         db.refresh(db_repo)
 
-    # 🔥 Run analysis in background
     background_tasks.add_task(
         analyze_repo_background,
         db_repo.id,
@@ -108,13 +103,10 @@ def analyze_repository(
     return {
         "repo_id": db_repo.id,
         "repo": f"{db_repo.owner}/{db_repo.name}",
-        "status": "queued"
+        "status": db_repo.status
     }
 
 
-# -------------------------
-# GET ALL REPOSITORIES
-# -------------------------
 @router.get("/repositories")
 def get_repositories(db: Session = Depends(get_db)):
     repos = db.query(Repository).order_by(Repository.id.desc()).all()
@@ -128,25 +120,17 @@ def get_repositories(db: Session = Depends(get_db)):
     ]
 
 
-# -------------------------
-# DELETE REPOSITORY
-# -------------------------
 @router.delete("/repositories/{repo_id}")
 def delete_repository(repo_id: int, db: Session = Depends(get_db)):
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
-
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
     db.delete(repo)
     db.commit()
+    return {"message": "Repository deleted"}
 
-    return {"message": "Repository and related data deleted successfully"}
 
-
-# -------------------------
-# DB HEALTH CHECK
-# -------------------------
 @router.get("/health/db")
 def db_health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
