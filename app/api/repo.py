@@ -109,7 +109,7 @@ def analyze_repository(
 
 @router.get("/repositories")
 def get_repositories(db: Session = Depends(get_db)):
-    repos = db.query(Repository).order_by(Repository.id.desc()).all()
+    repos = db.query(Repository).order_by(Repository.id.asc()).all()
     return [
         {
             "id": r.id,

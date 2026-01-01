@@ -16,7 +16,7 @@ def get_issues(
         if difficulty:
             query = query.filter(Issue.difficulty == difficulty)
 
-        issues = query.order_by(Issue.id.desc()).all()
+        issues = query.order_by(Issue.id.asc()).all()
 
         return [
             {
