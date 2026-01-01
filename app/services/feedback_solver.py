@@ -1,3 +1,6 @@
+from app.config.settings import settings
+from app.services.solution_generator import client
+
 def refine_solution(repo_context, issue, step, error):
     prompt = f"""
 The previous solution step failed.

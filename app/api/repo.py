@@ -1,6 +1,12 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Query,
+    Depends,
+    BackgroundTasks
+)
 from app.services.github_service import GitHubService
-from app.services.issue_ingestor import ingest_issues
+from app.services.issue_ingestor import ingest_issues_chunked
 from app.utils.db import SessionLocal
 from app.config.settings import settings
 from app.models.repository import Repository
@@ -23,11 +29,46 @@ def get_db():
 
 
 # -------------------------
-# ANALYZE REPOSITORY
+# Background Task
+# -------------------------
+def analyze_repo_background(repo_id: int, repo_url: str, force: bool):
+    db = SessionLocal()
+    try:
+        github = GitHubService(settings.GITHUB_TOKEN)
+        repo = github.get_repo(repo_url)
+
+        db_repo = db.query(Repository).get(repo_id)
+        if not db_repo:
+            return
+
+        if force:
+            db.query(Issue).filter(Issue.repo_id == repo_id).delete()
+            db.commit()
+
+        db_repo.status = "analyzing"
+        db.commit()
+
+        count = ingest_issues_chunked(repo, db, repo_id=repo_id)
+
+        db_repo.status = "ready" if count > 0 else "empty"
+        db_repo.analyzed = True
+        db.commit()
+
+    except Exception:
+        if db_repo:
+            db_repo.status = "error"
+            db.commit()
+    finally:
+        db.close()
+
+
+# -------------------------
+# ANALYZE REPOSITORY (NON-BLOCKING)
 # -------------------------
 @router.post("/analyze")
 def analyze_repository(
     repo_url: str,
+    background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
     db: Session = Depends(get_db)
 ):
@@ -49,44 +90,25 @@ def analyze_repository(
             name=repo.name,
             owner=repo.owner.login,
             repo_url=repo.html_url,
-            status="analyzing",
+            status="queued",
             analyzed=False
         )
         db.add(db_repo)
         db.commit()
         db.refresh(db_repo)
 
-    # 🔥 FORCE REANALYZE (delete issues only, repo stays)
-    if force:
-        db.query(Issue).filter(Issue.repo_id == db_repo.id).delete()
-        db.commit()
-
-    issue_count = (
-        db.query(func.count(Issue.id))
-        .filter(Issue.repo_id == db_repo.id)
-        .scalar()
+    # 🔥 Run analysis in background
+    background_tasks.add_task(
+        analyze_repo_background,
+        db_repo.id,
+        repo_url,
+        force
     )
-
-    if issue_count == 0:
-        db_repo.status = "analyzing"
-        db.commit()
-
-        try:
-            count = ingest_issues(repo, db, repo_id=db_repo.id)
-
-            db_repo.status = "ready" if count > 0 else "empty"
-            db_repo.analyzed = True
-            db.commit()
-
-        except Exception as e:
-            db_repo.status = "error"
-            db.commit()
-            raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "repo_id": db_repo.id,
         "repo": f"{db_repo.owner}/{db_repo.name}",
-        "status": db_repo.status
+        "status": "queued"
     }
 
 
@@ -107,7 +129,7 @@ def get_repositories(db: Session = Depends(get_db)):
 
 
 # -------------------------
-# DELETE REPOSITORY (🔥 NEW)
+# DELETE REPOSITORY
 # -------------------------
 @router.delete("/repositories/{repo_id}")
 def delete_repository(repo_id: int, db: Session = Depends(get_db)):
@@ -116,9 +138,6 @@ def delete_repository(repo_id: int, db: Session = Depends(get_db)):
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    # 🚨 This will automatically delete:
-    # - issues
-    # - solutions (via cascade)
     db.delete(repo)
     db.commit()
 
