@@ -6,7 +6,10 @@ class Repository(Base):
 
     id = Column(Integer, primary_key=True)
     github_id = Column(Integer, unique=True, index=True)
-    name = Column(String, index=True)        # repo name only
-    owner = Column(String, index=True)       # repo owner
-    repo_url = Column(String)                # full GitHub URL
-    analyzed = Column(Boolean, default=True)
+    name = Column(String, index=True)
+    owner = Column(String, index=True)
+    repo_url = Column(String)
+
+    analyzed = Column(Boolean, default=False)
+    status = Column(String, default="idle")  
+    # idle | analyzing | ready | empty | error
