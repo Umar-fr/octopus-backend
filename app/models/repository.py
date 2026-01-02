@@ -12,4 +12,5 @@ class Repository(Base):
 
     analyzed = Column(Boolean, default=False)
     status = Column(String, default="idle")  
+    
     # idle | analyzing | ready | empty | error

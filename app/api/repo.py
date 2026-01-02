@@ -14,6 +14,8 @@ from app.models.issue import Issue
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 import traceback
+from app.auth.dependencies import get_current_user
+from app.models.user import User
 
 router = APIRouter()
 
@@ -61,24 +63,23 @@ def analyze_repo_background(repo_id: int, repo_url: str, force: bool):
         db.close()
 
 
+from app.models.user_repository import UserRepository
+
 @router.post("/analyze")
 def analyze_repository(
     repo_url: str,
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     github = GitHubService(settings.GITHUB_TOKEN)
     repo = github.get_repo(repo_url)
 
-    db_repo = (
-        db.query(Repository)
-        .filter(
-            Repository.name == repo.name,
-            Repository.owner == repo.owner.login
-        )
-        .first()
-    )
+    # GLOBAL repo lookup
+    db_repo = db.query(Repository).filter(
+        Repository.github_id == repo.id
+    ).first()
 
     if not db_repo:
         db_repo = Repository(
@@ -93,12 +94,25 @@ def analyze_repository(
         db.commit()
         db.refresh(db_repo)
 
-    background_tasks.add_task(
-        analyze_repo_background,
-        db_repo.id,
-        repo_url,
-        force
-    )
+        background_tasks.add_task(
+            analyze_repo_background,
+            db_repo.id,
+            repo_url,
+            force
+        )
+
+    # LINK USER TO REPO
+    exists = db.query(UserRepository).filter(
+        UserRepository.user_id == current_user["id"],
+        UserRepository.repository_id == db_repo.id
+    ).first()
+
+    if not exists:
+        db.add(UserRepository(
+            user_id=current_user["id"],
+            repository_id=db_repo.id
+        ))
+        db.commit()
 
     return {
         "repo_id": db_repo.id,
@@ -107,9 +121,20 @@ def analyze_repository(
     }
 
 
+
 @router.get("/repositories")
-def get_repositories(db: Session = Depends(get_db)):
-    repos = db.query(Repository).order_by(Repository.id.asc()).all()
+def get_repositories(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    repos = (
+        db.query(Repository)
+        .join(UserRepository)
+        .filter(UserRepository.user_id == current_user.id)
+        .order_by(Repository.id.asc())
+        .all()
+    )
+
     return [
         {
             "id": r.id,
@@ -118,6 +143,7 @@ def get_repositories(db: Session = Depends(get_db)):
         }
         for r in repos
     ]
+
 
 
 @router.delete("/repositories/{repo_id}")
