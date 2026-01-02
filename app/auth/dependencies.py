@@ -8,7 +8,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/github")
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
-    print("Decoding token:", token)
+    
     payload = decode_access_token(token)
 
     if not payload:

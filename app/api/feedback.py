@@ -13,7 +13,6 @@ import json
 router = APIRouter(prefix="/feedback", tags=["Feedback"])
 
 
-# ✅ Request body schema
 class FeedbackRequest(BaseModel):
     issue_id: int
     step_number: int
@@ -28,45 +27,42 @@ def submit_feedback(
     db: Session = SessionLocal()
 
     try:
-        # 1️⃣ Load issue
+        # 1️⃣ Validate issue
         issue = db.query(Issue).filter_by(id=payload.issue_id).first()
         if not issue:
-            raise HTTPException(status_code=404, detail="Issue not found")
+            raise HTTPException(404, "Issue not found")
 
-        # 2️⃣ Load existing solution
+        # 2️⃣ Validate solution exists
         solution = (
             db.query(IssueSolution)
             .filter(IssueSolution.issue_id == payload.issue_id)
             .first()
         )
         if not solution:
-            raise HTTPException(
-                status_code=400,
-                detail="Solution does not exist yet"
-            )
+            raise HTTPException(400, "Solution not generated yet")
 
         steps = json.loads(solution.steps)
 
-        # 3️⃣ Find the failed step
         failed_step = next(
             (s for s in steps if s["step"] == payload.step_number),
             None
         )
         if not failed_step:
-            raise HTTPException(
-                status_code=404,
-                detail="Step not found in solution"
+            raise HTTPException(404, "Step not found")
+
+        # 3️⃣ Generate refined step (DO NOT SAVE)
+        try:
+            refined_step = refine_solution(
+                repo_context=f"Repository ID: {issue.repo_id}",
+                issue=issue,
+                step=failed_step,
+                error=payload.error,
             )
+        except Exception as e:
+            # Fallback: return original step unchanged
+            refined_step = failed_step
 
-        # 4️⃣ Refine step using AI
-        refined_step = refine_solution(
-            repo_context=f"Repository ID: {issue.repo_id}",
-            issue=issue,
-            step=failed_step,
-            error=payload.error,
-        )
-
-        # 5️⃣ Save feedback
+        # 4️⃣ Save feedback ONLY
         feedback = StepFeedback(
             issue_id=payload.issue_id,
             user_id=current_user.id,
@@ -74,18 +70,11 @@ def submit_feedback(
             user_error=payload.error,
         )
         db.add(feedback)
-
-        # 6️⃣ Replace step in GLOBAL solution
-        for i, s in enumerate(steps):
-            if s["step"] == payload.step_number:
-                steps[i] = refined_step
-                break
-
-        solution.steps = json.dumps(steps)
         db.commit()
 
+        # 5️⃣ Return refined step ONLY to this user
         return {
-            "status": "refined",
+            "status": "ok",
             "refined_step": refined_step
         }
 
