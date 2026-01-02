@@ -8,24 +8,25 @@ client = AzureOpenAI(
     azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
 )
 
-def generate_solution(repo_context, issue):
+def generate_solution(repo_context: str, issue):
     prompt = f"""
-You are a senior software engineer.
+You are a senior open-source contributor.
 
-Repository Context:
 {repo_context}
 
 GitHub Issue:
 Title: {issue.title}
 Description: {issue.body}
 
-Generate a step-by-step solution.
+TASK:
+Generate a precise, contribution-ready solution.
 
-STRICT RULES:
+RULES:
+- Reference REAL file paths from the repo
+- Be concise and actionable
 - Respond ONLY with valid JSON
-- Do NOT include markdown
-- Do NOT include explanations outside JSON
-- Do NOT wrap response in ```json
+- No markdown
+- No explanations outside JSON
 
 JSON FORMAT:
 [
@@ -48,20 +49,12 @@ JSON FORMAT:
 
     content = response.choices[0].message.content.strip()
 
-    # 🛡️ Remove markdown fences if Azure adds them
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
 
-    try:
-        parsed = json.loads(content)
+    parsed = json.loads(content)
 
-        # Extra safety check
-        if not isinstance(parsed, list):
-            raise ValueError("AI response is not a list")
+    if not isinstance(parsed, list):
+        raise ValueError("AI response is not a list")
 
-        return parsed
-
-    except Exception as e:
-        raise ValueError(
-            f"AI returned invalid JSON.\n\nRaw response:\n{content}"
-        ) from e
+    return parsed

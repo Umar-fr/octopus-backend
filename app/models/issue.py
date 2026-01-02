@@ -6,7 +6,7 @@ class Issue(Base):
 
     id = Column(Integer, primary_key=True)
     repo_id = Column(Integer, index=True)
-    issue_number = Column(Integer)
+    issue_number = Column(Integer, nullable=False)
     title = Column(String)
     body = Column(Text)
     difficulty = Column(String)  # Beginner | Moderate | Professional

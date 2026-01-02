@@ -5,6 +5,10 @@ from app.models.issue import Issue
 from app.models.solution import IssueSolution
 from app.services.solution_generator import generate_solution
 from app.services.solution_service import save_solution
+from app.services.github_service import GitHubService
+from app.services.repo_context_builder import build_repo_context
+from app.config.settings import settings
+from app.models.repository import Repository
 
 router = APIRouter(prefix="/solutions", tags=["Solutions"])
 
@@ -13,46 +17,31 @@ def get_or_generate_solution(issue_id: int):
     db = SessionLocal()
 
     try:
-        # 1️⃣ Check cache
-        cached = (
-            db.query(IssueSolution)
-            .filter(IssueSolution.issue_id == issue_id)
-            .first()
-        )
-
+        cached = db.query(IssueSolution).filter_by(issue_id=issue_id).first()
         if cached:
-            return {
-                "cached": True,
-                "steps": json.loads(cached.steps)
-            }
+            return {"cached": True, "steps": json.loads(cached.steps)}
 
-        # 2️⃣ Load issue
-        issue = db.query(Issue).filter(Issue.id == issue_id).first()
+        issue = db.query(Issue).filter_by(id=issue_id).first()
         if not issue:
-            raise HTTPException(status_code=404, detail="Issue not found")
+            raise HTTPException(404, "Issue not found")
 
-        # 3️⃣ Repo context (can be expanded later)
-        repo_context = f"Repository ID: {issue.repo_id}"
+        repo = db.query(Repository).filter_by(id=issue.repo_id).first()
+        if not repo:
+            raise HTTPException(404, "Repository not found")
 
-        # 4️⃣ Generate solution (SAFE)
-        try:
-            steps = generate_solution(repo_context, issue)
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "message": "AI failed to generate a valid solution",
-                    "error": str(e)
-                }
-            )
+        github = GitHubService(settings.GITHUB_TOKEN)
+        gh_repo = github.client.get_repo(f"{repo.owner}/{repo.name}")
 
-        # 5️⃣ Save to DB
+        readme = github.get_readme(gh_repo)
+        tree = github.get_tree(gh_repo)
+
+        repo_context = build_repo_context(gh_repo, readme, tree)
+
+        steps = generate_solution(repo_context, issue)
+
         save_solution(db, issue.id, steps)
 
-        return {
-            "cached": False,
-            "steps": steps
-        }
+        return {"cached": False, "steps": steps}
 
     finally:
         db.close()

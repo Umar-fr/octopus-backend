@@ -71,7 +71,7 @@ def analyze_repository(
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     github = GitHubService(settings.GITHUB_TOKEN)
     repo = github.get_repo(repo_url)
@@ -103,13 +103,13 @@ def analyze_repository(
 
     # LINK USER TO REPO
     exists = db.query(UserRepository).filter(
-        UserRepository.user_id == current_user["id"],
+        UserRepository.user_id == current_user.id,
         UserRepository.repository_id == db_repo.id
     ).first()
 
     if not exists:
         db.add(UserRepository(
-            user_id=current_user["id"],
+            user_id=current_user.id,
             repository_id=db_repo.id
         ))
         db.commit()
@@ -147,14 +147,39 @@ def get_repositories(
 
 
 @router.delete("/repositories/{repo_id}")
-def delete_repository(repo_id: int, db: Session = Depends(get_db)):
-    repo = db.query(Repository).filter(Repository.id == repo_id).first()
-    if not repo:
+def delete_repository(
+    repo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    link = (
+        db.query(UserRepository)
+        .filter_by(user_id=current_user.id, repository_id=repo_id)
+        .first()
+    )
+
+    if not link:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    db.delete(repo)
+    # 1️⃣ Remove user mapping
+    db.delete(link)
     db.commit()
-    return {"message": "Repository deleted"}
+
+    # 2️⃣ Check if repo is still used
+    still_used = (
+        db.query(UserRepository)
+        .filter_by(repository_id=repo_id)
+        .count()
+    )
+
+    if still_used == 0:
+        repo = db.query(Repository).get(repo_id)
+        if repo:
+            db.delete(repo)
+            db.commit()
+
+    return {"status": "deleted"}
+
 
 
 @router.get("/health/db")
