@@ -131,7 +131,7 @@ def get_repositories(
         db.query(Repository)
         .join(UserRepository)
         .filter(UserRepository.user_id == current_user.id)
-        .order_by(Repository.id.asc())
+        .order_by(Repository.id.desc())
         .all()
     )
 

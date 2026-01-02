@@ -35,3 +35,15 @@ class GitHubService:
                 paths.append(item.path)
 
         return paths
+    
+    def get_file_content(self, repo, path: str) -> str:
+        """
+        Fetch and decode file content safely.
+        """
+        try:
+            file = repo.get_contents(path)
+            if file.encoding == "base64":
+                return base64.b64decode(file.content).decode("utf-8")
+            return ""
+        except Exception:
+            return ""

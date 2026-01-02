@@ -7,6 +7,7 @@ from app.models.feedback import StepFeedback
 from app.services.solution_generator import generate_solution
 from app.services.feedback_solver import refine_solution
 from app.services.solution_validator import enforce_strict_paths
+from app.services.solution_file_selector import select_relevant_files
 from app.auth.dependencies import get_current_user
 from app.models.user import User
 from app.models.repository import Repository
@@ -29,22 +30,38 @@ def get_or_generate_solution(
         # 1️⃣ Load issue + repo
         issue = db.query(Issue).filter_by(id=issue_id).first()
         if not issue:
-            raise HTTPException(status_code=404, detail="Issue not found")
+            raise HTTPException(404, "Issue not found")
 
         repo = db.query(Repository).filter_by(id=issue.repo_id).first()
         if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+            raise HTTPException(404, "Repository not found")
 
-        # 2️⃣ Load GitHub context (ALWAYS)
+        # 2️⃣ GitHub access
         github = GitHubService(settings.GITHUB_TOKEN)
         gh_repo = github.client.get_repo(f"{repo.owner}/{repo.name}")
 
         readme = github.get_readme(gh_repo)
         tree = github.get_tree(gh_repo)
 
-        repo_context = build_repo_context(gh_repo, readme, tree)
+        # 3️⃣ Select + fetch real files
+        relevant_paths = select_relevant_files(
+            tree,
+            issue.title + " " + (issue.body or "")
+        )
 
-        # 3️⃣ Load or generate GLOBAL solution
+        files = {
+            path: github.get_file_content(gh_repo, path)
+            for path in relevant_paths
+        }
+
+        repo_context = build_repo_context(
+            gh_repo,
+            readme,
+            tree,
+            files
+        )
+
+        # 4️⃣ Load or generate solution
         solution = (
             db.query(IssueSolution)
             .filter(IssueSolution.issue_id == issue_id)
@@ -53,22 +70,19 @@ def get_or_generate_solution(
 
         if not solution:
             steps = generate_solution(repo_context, issue)
-
-            # 🔒 Enforce strict repo accuracy BEFORE saving
             steps = enforce_strict_paths(steps, tree)
 
-            # 🔒 Ensure PR step exists ONCE
             if not any("pull request" in s["title"].lower() for s in steps):
                 steps.append({
                     "step": max(s["step"] for s in steps) + 1,
                     "title": "Open Pull Request",
-                    "explanation": "Submit your changes for maintainer review.",
+                    "explanation": "Submit your changes for review.",
                     "file": "",
                     "action": (
-                        "git push origin <your-branch>\n"
+                        "git push origin <branch>\n"
                         "Open GitHub → Create Pull Request"
                     ),
-                    "verification": "CI passes and maintainers review the PR."
+                    "verification": "PR opened and CI passes."
                 })
 
             solution = IssueSolution(
@@ -77,11 +91,10 @@ def get_or_generate_solution(
             )
             db.add(solution)
             db.commit()
-
         else:
             steps = json.loads(solution.steps)
 
-        # 4️⃣ Apply USER-SPECIFIC feedback (overlay only)
+        # 5️⃣ Apply user feedback overlay
         feedbacks = (
             db.query(StepFeedback)
             .filter(

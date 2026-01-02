@@ -32,7 +32,7 @@ def get_issues(
     if difficulty:
         query = query.filter(Issue.difficulty == difficulty)
 
-    issues = query.order_by(Issue.issue_number.asc()).all()
+    issues = query.order_by(Issue.issue_number.desc()).all()
 
     # ✅ EXPLICIT RESPONSE SHAPE (CRITICAL FIX)
     return [
