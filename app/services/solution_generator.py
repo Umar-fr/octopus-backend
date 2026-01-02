@@ -10,7 +10,7 @@ client = AzureOpenAI(
 
 def generate_solution(repo_context: str, issue):
     prompt = f"""
-You are a senior open-source contributor.
+You are a senior open-source contributor mentoring a first-time contributor.
 
 {repo_context}
 
@@ -19,19 +19,29 @@ Title: {issue.title}
 Description: {issue.body}
 
 TASK:
-Generate a precise, contribution-ready solution.
+Produce a FULL contribution workflow.
 
-RULES:
-- Reference REAL file paths from the repo
-- Be concise and actionable
-- Respond ONLY with valid JSON
-- No markdown
-- No explanations outside JSON
+MANDATORY WORKFLOW:
+0. Clone repository
+1. Create a feature branch
+2. Locate or create relevant files
+3. Implement fix
+4. Test locally
+5. Commit changes
+6. Push branch
+7. Open Pull Request
 
-JSON FORMAT:
+STRICT RULES:
+- ONLY use file paths from the repository tree
+- If a file is missing, explicitly instruct to CREATE it
+- Include shell commands where applicable
+- Be realistic and precise
+- JSON ONLY
+
+OUTPUT FORMAT:
 [
   {{
-    "step": 1,
+    "step": 0,
     "title": "",
     "explanation": "",
     "file": "",
@@ -43,8 +53,11 @@ JSON FORMAT:
 
     response = client.chat.completions.create(
         model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
+        messages=[
+            {"role": "system", "content": "You generate precise, repository-grounded contribution steps."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.05
     )
 
     content = response.choices[0].message.content.strip()
@@ -55,6 +68,6 @@ JSON FORMAT:
     parsed = json.loads(content)
 
     if not isinstance(parsed, list):
-        raise ValueError("AI response is not a list")
+        raise ValueError("AI response must be a list")
 
     return parsed

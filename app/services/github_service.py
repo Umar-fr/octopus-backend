@@ -18,9 +18,9 @@ class GitHubService:
         except Exception:
             return ""
 
-    def get_tree(self, repo, max_items=50) -> List[str]:
+    def get_tree(self, repo, max_items=800) -> List[str]:
         """
-        Token-safe repo structure extraction
+        Accurate repo structure extraction (files + folders)
         """
         tree = repo.get_git_tree(repo.default_branch, recursive=True).tree
         paths = []
@@ -28,7 +28,10 @@ class GitHubService:
         for item in tree:
             if len(paths) >= max_items:
                 break
+
             if item.type == "tree":
                 paths.append(f"{item.path}/")
+            elif item.type == "blob":
+                paths.append(item.path)
 
         return paths
