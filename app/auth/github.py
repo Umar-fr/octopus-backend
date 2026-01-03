@@ -16,8 +16,11 @@ def github_login():
     github_auth_url = (
         "https://github.com/login/oauth/authorize"
         f"?client_id={os.getenv('GITHUB_CLIENT_ID')}"
+        f"&redirect_uri={os.getenv('GITHUB_REDIRECT_URI')}"
         "&scope=user"
+        "&prompt=select_account"
     )
+
     return RedirectResponse(github_auth_url)
 
 
@@ -36,6 +39,7 @@ def github_callback(request: Request):
             "client_id": os.getenv("GITHUB_CLIENT_ID"),
             "client_secret": os.getenv("GITHUB_CLIENT_SECRET"),
             "code": code,
+            "redirect_uri": os.getenv("GITHUB_REDIRECT_URI"),
         },
     )
 
@@ -51,7 +55,7 @@ def github_callback(request: Request):
 
     github_user = user_response.json()
 
-    # 🔹 STEP 4 — CREATE / FETCH USER IN DB 🔹
+    # 🔹 Create / fetch user
     db = SessionLocal()
     try:
         user = db.query(User).filter(
@@ -62,7 +66,6 @@ def github_callback(request: Request):
             user = User(
                 github_id=github_user["id"],
                 username=github_user["login"]
-                
             )
             db.add(user)
             db.commit()
@@ -76,7 +79,6 @@ def github_callback(request: Request):
         "avatar": github_user["avatar_url"],
     })
 
-    # Redirect to frontend
     return RedirectResponse(
         f"{os.getenv('FRONTEND_URL')}/auth/success?token={jwt_token}"
     )
