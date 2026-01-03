@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy import Column, Integer, String, Text, Index
 from app.models.base import Base
 
 class Issue(Base):
@@ -9,4 +9,10 @@ class Issue(Base):
     issue_number = Column(Integer, nullable=False)
     title = Column(String)
     body = Column(Text)
-    difficulty = Column(String)  # Beginner | Moderate | Professional
+
+    # 👇 NEW
+    difficulty = Column(String, default="Pending", index=True)
+
+    __table_args__ = (
+        Index("idx_repo_difficulty", "repo_id", "difficulty"),
+    )

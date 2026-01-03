@@ -2,12 +2,13 @@ from github import Github
 from typing import List
 import base64
 
+
 class GitHubService:
     def __init__(self, token: str):
-        self.client = Github(token)
+        self.client = Github(token, per_page=100)
 
     def get_repo(self, repo_url: str):
-        parts = repo_url.replace("https://github.com/", "").split("/")
+        parts = repo_url.replace("https://github.com/", "").strip("/").split("/")
         owner, repo = parts[0], parts[1]
         return self.client.get_repo(f"{owner}/{repo}")
 
@@ -19,9 +20,6 @@ class GitHubService:
             return ""
 
     def get_tree(self, repo, max_items=800) -> List[str]:
-        """
-        Accurate repo structure extraction (files + folders)
-        """
         tree = repo.get_git_tree(repo.default_branch, recursive=True).tree
         paths = []
 
@@ -35,11 +33,8 @@ class GitHubService:
                 paths.append(item.path)
 
         return paths
-    
+
     def get_file_content(self, repo, path: str) -> str:
-        """
-        Fetch and decode file content safely.
-        """
         try:
             file = repo.get_contents(path)
             if file.encoding == "base64":
@@ -47,3 +42,10 @@ class GitHubService:
             return ""
         except Exception:
             return ""
+
+    def get_open_issue_count(self, owner: str, repo: str) -> int:
+        """
+        TRUE open issues count (PRs excluded)
+        """
+        query = f"repo:{owner}/{repo} is:issue is:open"
+        return self.client.search_issues(query=query).totalCount

@@ -1,25 +1,36 @@
 from fastapi import (
     APIRouter,
     HTTPException,
-    Query,
     Depends,
-    BackgroundTasks
+    BackgroundTasks,
 )
-from app.services.github_service import GitHubService
-from app.services.issue_ingestor import ingest_issues_chunked
+from sqlalchemy.orm import Session
+from sqlalchemy import func, text
+import threading
+import time
+import traceback
+import asyncio
+
 from app.utils.db import SessionLocal
 from app.config.settings import settings
-from app.models.repository import Repository
-from app.models.issue import Issue
-from sqlalchemy import text
-from sqlalchemy.orm import Session
-import traceback
 from app.auth.dependencies import get_current_user
 from app.models.user import User
+from app.models.repository import Repository
+from app.models.issue import Issue
+from app.models.user_repository import UserRepository
+
+from app.services.github_service import GitHubService
+from app.services.issue_ingestor import ingest_issues_chunked
+from app.services.pending_issue_classifier import classify_pending_issues
+from app.ws.progress_manager import repo_progress_manager
+
 
 router = APIRouter()
 
 
+# -------------------------
+# DB Dependency
+# -------------------------
 def get_db():
     db = SessionLocal()
     try:
@@ -28,100 +39,159 @@ def get_db():
         db.close()
 
 
-def analyze_repo_background(repo_id: int, repo_url: str, force: bool):
+# -------------------------
+# SAFE WS BROADCAST (THREAD-SAFE)
+# -------------------------
+def ws_broadcast(repo_id: int, payload: dict):
+    try:
+        asyncio.run(
+            repo_progress_manager.broadcast(repo_id, payload)
+        )
+    except RuntimeError:
+        # happens if event loop already closed → ignore safely
+        pass
+
+
+# -------------------------
+# Background Classifier
+# -------------------------
+def background_classifier(repo_id: int):
     db = SessionLocal()
     try:
-        github = GitHubService(settings.GITHUB_TOKEN)
-        repo = github.get_repo(repo_url)
-
-        db_repo = db.query(Repository).get(repo_id)
-        if not db_repo:
+        repo = db.query(Repository).get(repo_id)
+        if not repo:
             return
 
-        if force:
-            db.query(Issue).filter(Issue.repo_id == repo_id).delete()
+        while True:
+            processed = classify_pending_issues(db, repo_id)
+            if processed == 0:
+                break
+
+            repo.issues_classified += processed
             db.commit()
 
-        db_repo.status = "analyzing"
+            ws_broadcast(repo_id, {
+                "issues_classified": repo.issues_classified,
+                "issues_ingested": repo.issues_ingested,
+                "issues_total_estimate": repo.issues_total_estimate,
+                "status": "classifying",
+            })
+
+            time.sleep(1)
+
+        repo.status = "ready"
+        repo.analysis_stage = "complete"
         db.commit()
 
-        count = ingest_issues_chunked(repo, db, repo_id)
+        ws_broadcast(repo_id, {
+            "issues_classified": repo.issues_classified,
+            "issues_ingested": repo.issues_ingested,
+            "issues_total_estimate": repo.issues_total_estimate,
+            "status": "ready",
+        })
 
-        db_repo.status = "ready" if count > 0 else "empty"
-        db_repo.analyzed = True
-        db.commit()
-
-    except Exception as e:
-        print("❌ ANALYZE FAILED")
-        print(traceback.format_exc())
-
-        db_repo = db.query(Repository).get(repo_id)
-        if db_repo:
-            db_repo.status = "error"
-            db.commit()
     finally:
         db.close()
 
 
-from app.models.user_repository import UserRepository
+# -------------------------
+# Background Snapshot Ingest
+# -------------------------
+def analyze_repo_background(repo_id: int, repo_url: str):
+    db = SessionLocal()
+    try:
+        github = GitHubService(settings.GITHUB_TOKEN)
+        gh_repo = github.get_repo(repo_url)
 
+        repo = db.query(Repository).get(repo_id)
+        if not repo:
+            return
+
+        repo.issues_ingested = 0
+        repo.issues_classified = 0
+        repo.status = "processing"
+        repo.analysis_stage = "streaming"
+        db.commit()
+
+        ingest_issues_chunked(gh_repo, db, repo_id)
+
+        repo.status = "ready"
+        repo.analysis_stage = "complete"
+        db.commit()
+
+    except Exception:
+        repo.status = "error"
+        db.commit()
+        traceback.print_exc()
+    finally:
+        db.close()
+
+
+
+# -------------------------
+# ANALYZE ENDPOINT
+# -------------------------
 @router.post("/analyze")
 def analyze_repository(
     repo_url: str,
     background_tasks: BackgroundTasks,
-    force: bool = Query(default=False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     github = GitHubService(settings.GITHUB_TOKEN)
-    repo = github.get_repo(repo_url)
+    gh_repo = github.get_repo(repo_url)
 
-    # GLOBAL repo lookup
-    db_repo = db.query(Repository).filter(
-        Repository.github_id == repo.id
-    ).first()
+    repo = (
+        db.query(Repository)
+        .filter(Repository.github_id == gh_repo.id)
+        .first()
+    )
 
-    if not db_repo:
-        db_repo = Repository(
-            github_id=repo.id,
-            name=repo.name,
-            owner=repo.owner.login,
-            repo_url=repo.html_url,
+    if not repo:
+        repo = Repository(
+            github_id=gh_repo.id,
+            name=gh_repo.name,
+            owner=gh_repo.owner.login,
+            repo_url=gh_repo.html_url,
             status="queued",
-            analyzed=False
+            analysis_stage="queued",
         )
-        db.add(db_repo)
+        db.add(repo)
         db.commit()
-        db.refresh(db_repo)
+        db.refresh(repo)
 
         background_tasks.add_task(
             analyze_repo_background,
-            db_repo.id,
+            repo.id,
             repo_url,
-            force
         )
 
-    # LINK USER TO REPO
-    exists = db.query(UserRepository).filter(
-        UserRepository.user_id == current_user.id,
-        UserRepository.repository_id == db_repo.id
-    ).first()
+    exists = (
+        db.query(UserRepository)
+        .filter_by(
+            user_id=current_user.id,
+            repository_id=repo.id,
+        )
+        .first()
+    )
 
     if not exists:
         db.add(UserRepository(
             user_id=current_user.id,
-            repository_id=db_repo.id
+            repository_id=repo.id,
         ))
         db.commit()
 
     return {
-        "repo_id": db_repo.id,
-        "repo": f"{db_repo.owner}/{db_repo.name}",
-        "status": db_repo.status
+        "repo_id": repo.id,
+        "repo": f"{repo.owner}/{repo.name}",
+        "status": repo.status,
     }
 
 
-
+# -------------------------
+# REPOSITORIES (SAFE FALLBACK)
+# -------------------------
 @router.get("/repositories")
 def get_repositories(
     db: Session = Depends(get_db),
@@ -135,17 +205,44 @@ def get_repositories(
         .all()
     )
 
-    return [
-        {
+    response = []
+
+    for r in repos:
+        ingested = (
+            db.query(func.count(Issue.id))
+            .filter(Issue.repo_id == r.id)
+            .scalar()
+        )
+
+        classified = (
+            db.query(func.count(Issue.id))
+            .filter(
+                Issue.repo_id == r.id,
+                Issue.difficulty != "Pending"
+            )
+            .scalar()
+        )
+
+        total = max(r.issues_total_estimate or 0, ingested)
+        completion = int((classified / total) * 100) if total else 0
+
+        response.append({
             "id": r.id,
             "name": f"{r.owner}/{r.name}",
-            "status": r.status
-        }
-        for r in repos
-    ]
+            "status": r.status,
+            "analysis_stage": r.analysis_stage,
+            "issues_ingested": ingested,
+            "issues_classified": classified,
+            "issues_total_estimate": total,
+            "completion": completion,
+        })
+
+    return response
 
 
-
+# -------------------------
+# DELETE
+# -------------------------
 @router.delete("/repositories/{repo_id}")
 def delete_repository(
     repo_id: int,
@@ -154,18 +251,19 @@ def delete_repository(
 ):
     link = (
         db.query(UserRepository)
-        .filter_by(user_id=current_user.id, repository_id=repo_id)
+        .filter_by(
+            user_id=current_user.id,
+            repository_id=repo_id,
+        )
         .first()
     )
 
     if not link:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    # 1️⃣ Remove user mapping
     db.delete(link)
     db.commit()
 
-    # 2️⃣ Check if repo is still used
     still_used = (
         db.query(UserRepository)
         .filter_by(repository_id=repo_id)
@@ -181,7 +279,9 @@ def delete_repository(
     return {"status": "deleted"}
 
 
-
+# -------------------------
+# HEALTH
+# -------------------------
 @router.get("/health/db")
 def db_health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
