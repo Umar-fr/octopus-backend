@@ -17,12 +17,15 @@ app = FastAPI(title="Octopus Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",  # Vite frontend
+        "http://localhost:5173",
+        "https://octor-frontend.vercel.app",
+        "https://octor-j8c8qvp4l-umar-frs-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Routers
 app.include_router(github_router)
