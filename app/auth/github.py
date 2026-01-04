@@ -2,7 +2,7 @@ import os
 import requests
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
-
+from app.utils.crypto import encrypt
 from app.utils.jwt import create_access_token
 from app.utils.db import SessionLocal
 from app.models.user import User
@@ -76,7 +76,7 @@ def github_callback(request: Request):
             db.add(user)
 
         # ✅ store GitHub token (required for repo fetch)
-        user.github_token = access_token
+        user.github_token = encrypt(access_token)
 
         db.commit()
         db.refresh(user)

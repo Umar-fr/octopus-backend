@@ -97,10 +97,17 @@ def background_classifier(repo_id: int):
 # -------------------------
 # Background Snapshot Ingest
 # -------------------------
-def analyze_repo_background(repo_id: int, repo_url: str):
+def analyze_repo_background(
+    repo_id: int,
+    repo_url: str,
+    encrypted_github_token: str,  # ✅ NEW
+):
     db = SessionLocal()
+    repo = None  # ✅ IMPORTANT
+
     try:
-        github = GitHubService(settings.GITHUB_TOKEN)
+        # ✅ Use USER token (encrypted)
+        github = GitHubService(encrypted_github_token)
         gh_repo = github.get_repo(repo_url)
 
         repo = db.query(Repository).get(repo_id)
@@ -115,14 +122,23 @@ def analyze_repo_background(repo_id: int, repo_url: str):
 
         ingest_issues_chunked(gh_repo, db, repo_id)
 
-        repo.status = "ready"
-        repo.analysis_stage = "complete"
+        # 🚫 If no issues were ingested
+        if repo.issues_ingested == 0:
+            repo.status = "ready"
+            repo.analysis_stage = "no_issues"
+        else:
+            repo.status = "ready"
+            repo.analysis_stage = "complete"
+
         db.commit()
 
     except Exception:
-        repo.status = "error"
-        db.commit()
+        if repo:  # ✅ avoid UnboundLocalError
+            repo.status = "error"
+            repo.analysis_stage = "error"
+            db.commit()
         traceback.print_exc()
+
     finally:
         db.close()
 
@@ -138,8 +154,15 @@ def analyze_repository(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    github = GitHubService(settings.GITHUB_TOKEN)
+    # ✅ user token is encrypted, GitHubService decrypts internally
+    github = GitHubService(current_user.github_token)
     gh_repo = github.get_repo(repo_url)
+
+    # 🔍 CHECK IF REPO HAS ISSUES ENABLED / AVAILABLE
+    open_issues = github.get_open_issue_count(
+        gh_repo.owner.login,
+        gh_repo.name,
+    )
 
     repo = (
         db.query(Repository)
@@ -148,23 +171,42 @@ def analyze_repository(
     )
 
     if not repo:
-        repo = Repository(
-            github_id=gh_repo.id,
-            name=gh_repo.name,
-            owner=gh_repo.owner.login,
-            repo_url=gh_repo.html_url,
-            status="queued",
-            analysis_stage="queued",
-        )
-        db.add(repo)
-        db.commit()
-        db.refresh(repo)
+        # 🚫 NO ISSUES CASE
+        if open_issues == 0:
+            repo = Repository(
+                github_id=gh_repo.id,
+                name=gh_repo.name,
+                owner=gh_repo.owner.login,
+                repo_url=gh_repo.html_url,
+                status="ready",
+                analysis_stage="no_issues",
+                issues_total_estimate=0,
+            )
+            db.add(repo)
+            db.commit()
+            db.refresh(repo)
 
-        background_tasks.add_task(
-            analyze_repo_background,
-            repo.id,
-            repo_url,
-        )
+        # ✅ NORMAL FLOW
+        else:
+            repo = Repository(
+                github_id=gh_repo.id,
+                name=gh_repo.name,
+                owner=gh_repo.owner.login,
+                repo_url=gh_repo.html_url,
+                status="queued",
+                analysis_stage="queued",
+                issues_total_estimate=open_issues,
+            )
+            db.add(repo)
+            db.commit()
+            db.refresh(repo)
+
+            background_tasks.add_task(
+                analyze_repo_background,
+                repo.id,
+                repo_url,
+                current_user.github_token,
+            )
 
     exists = (
         db.query(UserRepository)
@@ -176,10 +218,12 @@ def analyze_repository(
     )
 
     if not exists:
-        db.add(UserRepository(
-            user_id=current_user.id,
-            repository_id=repo.id,
-        ))
+        db.add(
+            UserRepository(
+                user_id=current_user.id,
+                repository_id=repo.id,
+            )
+        )
         db.commit()
 
     return {

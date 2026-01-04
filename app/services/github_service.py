@@ -1,10 +1,14 @@
 from github import Github
 from typing import List
 import base64
-
+from app.utils.crypto import decrypt
 
 class GitHubService:
-    def __init__(self, token: str):
+    def __init__(self, encrypted_token: str):
+        if not encrypted_token:
+            raise ValueError("Missing GitHub token")
+
+        token = decrypt(encrypted_token)
         self.client = Github(token, per_page=100)
 
     def get_repo(self, repo_url: str):

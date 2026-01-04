@@ -1,6 +1,7 @@
 from openai import AzureOpenAI
 from app.config.settings import settings
 import json
+import re
 
 client = AzureOpenAI(
     api_key=settings.AZURE_OPENAI_API_KEY,
@@ -8,13 +9,54 @@ client = AzureOpenAI(
     azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
 )
 
-def generate_solution(repo_context: str, issue):
+
+def _safe_parse_json(text: str):
+    """
+    Safely extract and parse JSON from LLM output.
+    Handles invalid escapes caused by code / paths.
+    """
+    # First attempt: direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Extract JSON block
+    match = re.search(r"\[[\s\S]*\]", text)
+    if not match:
+        raise ValueError("No JSON array found in LLM output")
+
+    cleaned = match.group(0)
+
+    # Fix common escape issues
+    cleaned = cleaned.replace("\\", "\\\\")
+    cleaned = cleaned.replace("\n", "\\n")
+    cleaned = cleaned.replace("\t", "\\t")
+
+    return json.loads(cleaned)
+
+
+def generate_solution(repo_context: str, issue, partial: bool = False):
+    partial_note = ""
+    if partial:
+        partial_note = """
+IMPORTANT:
+The repository analysis is still IN PROGRESS.
+- Repository context may be partial
+- Prefer conceptual guidance
+- Avoid guessing exact file paths
+- If unsure, explain assumptions clearly
+"""
+
     prompt = f"""
 You are a senior open-source contributor mentoring a first-time contributor.
 
+{partial_note}
+
+REPOSITORY CONTEXT:
 {repo_context}
 
-GitHub Issue:
+GITHUB ISSUE:
 Title: {issue.title}
 Description: {issue.body}
 
@@ -32,11 +74,11 @@ MANDATORY WORKFLOW:
 7. Open Pull Request
 
 STRICT RULES:
-- ONLY use file paths from the repository tree
-- If a file is missing, explicitly instruct to CREATE it
-- Include shell commands where applicable
+- Output STRICT JSON ONLY
+- No explanations outside JSON
+- If a file does not exist, clearly say CREATE it
+- Use shell commands where applicable
 - Be realistic and precise
-- JSON ONLY
 
 OUTPUT FORMAT:
 [
@@ -62,12 +104,13 @@ OUTPUT FORMAT:
 
     content = response.choices[0].message.content.strip()
 
+    # Remove markdown fences if present
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
 
-    parsed = json.loads(content)
+    parsed = _safe_parse_json(content)
 
     if not isinstance(parsed, list):
-        raise ValueError("AI response must be a list")
+        raise ValueError("AI response must be a list of steps")
 
     return parsed

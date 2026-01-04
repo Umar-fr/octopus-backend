@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-dotenv
 sqlalchemy
 psycopg2-binary
@@ -9,3 +9,5 @@ openai
 requests
 python-jose
 websockets
+cryptography
+anyio

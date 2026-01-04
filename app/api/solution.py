@@ -13,7 +13,6 @@ from app.models.user import User
 from app.models.repository import Repository
 from app.services.github_service import GitHubService
 from app.services.repo_context_builder import build_repo_context
-from app.config.settings import settings
 import json
 
 router = APIRouter(prefix="/solutions", tags=["Solutions"])
@@ -36,14 +35,17 @@ def get_or_generate_solution(
         if not repo:
             raise HTTPException(404, "Repository not found")
 
+        # Repo may still be processing
+        is_partial = repo.status != "ready"
+
         # 2️⃣ GitHub access
-        github = GitHubService(settings.GITHUB_TOKEN)
+        github = GitHubService(current_user.github_token)
         gh_repo = github.client.get_repo(f"{repo.owner}/{repo.name}")
 
         readme = github.get_readme(gh_repo)
         tree = github.get_tree(gh_repo)
 
-        # 3️⃣ Select + fetch real files
+        # 3️⃣ Select + fetch relevant files (best-effort)
         relevant_paths = select_relevant_files(
             tree,
             issue.title + " " + (issue.body or "")
@@ -69,8 +71,15 @@ def get_or_generate_solution(
         )
 
         if not solution:
-            steps = generate_solution(repo_context, issue)
-            steps = enforce_strict_paths(steps, tree)
+            steps = generate_solution(
+                repo_context=repo_context,
+                issue=issue,
+                partial=is_partial,
+            )
+
+            # Only enforce strict paths when repo is fully analyzed
+            if not is_partial:
+                steps = enforce_strict_paths(steps, tree)
 
             if not any("pull request" in s["title"].lower() for s in steps):
                 steps.append({
@@ -94,7 +103,7 @@ def get_or_generate_solution(
         else:
             steps = json.loads(solution.steps)
 
-        # 5️⃣ Apply user feedback overlay
+        # 5️⃣ Apply feedback overlay
         feedbacks = (
             db.query(StepFeedback)
             .filter(
