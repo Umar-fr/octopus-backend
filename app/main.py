@@ -7,7 +7,7 @@ from app.api.repo import router as repo_router
 from app.api.solution import router as solution_router
 from app.api.feedback import router as feedback_router
 from app.api.ws import router as ws_router
-
+from app.api.github_repos import router as github_repo_router
 
 load_dotenv(".env.local")
 
@@ -31,6 +31,7 @@ app.include_router(issues_router)
 app.include_router(solution_router)
 app.include_router(feedback_router)
 app.include_router(ws_router)
+app.include_router(github_repo_router)
 
 @app.get("/")
 def root():

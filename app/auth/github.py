@@ -17,10 +17,9 @@ def github_login():
         "https://github.com/login/oauth/authorize"
         f"?client_id={os.getenv('GITHUB_CLIENT_ID')}"
         f"&redirect_uri={os.getenv('GITHUB_REDIRECT_URI')}"
-        "&scope=user"
+        "&scope=repo user"
         "&prompt=select_account"
     )
-
     return RedirectResponse(github_auth_url)
 
 
@@ -31,7 +30,7 @@ def github_callback(request: Request):
     if not code:
         raise HTTPException(status_code=400, detail="Missing code")
 
-    # Exchange code → access token
+    # 🔁 Exchange code → access token
     token_response = requests.post(
         "https://github.com/login/oauth/access_token",
         headers={"Accept": "application/json"},
@@ -43,11 +42,13 @@ def github_callback(request: Request):
         },
     )
 
-    access_token = token_response.json().get("access_token")
+    token_data = token_response.json()
+    access_token = token_data.get("access_token")
+
     if not access_token:
         raise HTTPException(status_code=400, detail="GitHub auth failed")
 
-    # Fetch GitHub user
+    # 🔁 Fetch GitHub user
     user_response = requests.get(
         "https://api.github.com/user",
         headers={"Authorization": f"Bearer {access_token}"},
@@ -55,29 +56,42 @@ def github_callback(request: Request):
 
     github_user = user_response.json()
 
-    # 🔹 Create / fetch user
+    if "id" not in github_user:
+        raise HTTPException(status_code=400, detail="Failed to fetch GitHub user")
+
+    # 🔁 Create / update user in DB
     db = SessionLocal()
     try:
-        user = db.query(User).filter(
-            User.github_id == github_user["id"]
-        ).first()
+        user = (
+            db.query(User)
+            .filter(User.github_id == github_user["id"])
+            .first()
+        )
 
         if not user:
             user = User(
                 github_id=github_user["id"],
-                username=github_user["login"]
+                username=github_user["login"],
             )
             db.add(user)
-            db.commit()
+
+        # ✅ store GitHub token (required for repo fetch)
+        user.github_token = access_token
+
+        db.commit()
+        db.refresh(user)
+
     finally:
         db.close()
 
-    # 🔹 Create JWT
-    jwt_token = create_access_token({
-        "github_id": github_user["id"],
-        "username": github_user["login"],
-        "avatar": github_user["avatar_url"],
-    })
+    # 🔐 Create JWT (NO GitHub token inside)
+    jwt_token = create_access_token(
+        {
+            "github_id": github_user["id"],
+            "username": github_user["login"],
+            "avatar": github_user["avatar_url"],
+        }
+    )
 
     return RedirectResponse(
         f"{os.getenv('FRONTEND_URL')}/auth/success?token={jwt_token}"

@@ -7,4 +7,5 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     github_id = Column(Integer, unique=True, nullable=False)
     username = Column(String, index=True)
+    github_token = Column(String)  # encrypted later (future)
     # idle | analyzing | ready | empty | error
