@@ -8,29 +8,40 @@ client = AzureOpenAI(
     azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
 )
 
-def generate_solution(repo_context, issue):
+def generate_solution(repo_context: str, issue):
     prompt = f"""
-You are a senior software engineer.
+You are a senior open-source contributor mentoring a first-time contributor.
 
-Repository Context:
 {repo_context}
 
 GitHub Issue:
 Title: {issue.title}
 Description: {issue.body}
 
-Generate a step-by-step solution.
+TASK:
+Produce a FULL contribution workflow.
+
+MANDATORY WORKFLOW:
+0. Clone repository
+1. Create a feature branch
+2. Locate or create relevant files
+3. Implement fix
+4. Test locally
+5. Commit changes
+6. Push branch
+7. Open Pull Request
 
 STRICT RULES:
-- Respond ONLY with valid JSON
-- Do NOT include markdown
-- Do NOT include explanations outside JSON
-- Do NOT wrap response in ```json
+- ONLY use file paths from the repository tree
+- If a file is missing, explicitly instruct to CREATE it
+- Include shell commands where applicable
+- Be realistic and precise
+- JSON ONLY
 
-JSON FORMAT:
+OUTPUT FORMAT:
 [
   {{
-    "step": 1,
+    "step": 0,
     "title": "",
     "explanation": "",
     "file": "",
@@ -42,26 +53,21 @@ JSON FORMAT:
 
     response = client.chat.completions.create(
         model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
+        messages=[
+            {"role": "system", "content": "You generate precise, repository-grounded contribution steps."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.05
     )
 
     content = response.choices[0].message.content.strip()
 
-    # 🛡️ Remove markdown fences if Azure adds them
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
 
-    try:
-        parsed = json.loads(content)
+    parsed = json.loads(content)
 
-        # Extra safety check
-        if not isinstance(parsed, list):
-            raise ValueError("AI response is not a list")
+    if not isinstance(parsed, list):
+        raise ValueError("AI response must be a list")
 
-        return parsed
-
-    except Exception as e:
-        raise ValueError(
-            f"AI returned invalid JSON.\n\nRaw response:\n{content}"
-        ) from e
+    return parsed
